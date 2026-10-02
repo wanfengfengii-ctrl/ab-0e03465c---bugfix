@@ -218,6 +218,49 @@ class TestKnownCases(unittest.TestCase):
         chosen = [[(p.index_a, p.index_b) for p in s.pairs] for s, _ in results]
         self.assertTrue(all(c == chosen[0] for c in chosen))
 
+    def test_tie_on_all_three_objectives_uses_index_sequence(self):
+        # 固定偏移 -1、容差 8 下存在两条保序一对一链，配对数(6)、
+        # 残差和(23)、最大残差(8) 完全相同：
+        #   X = (1,2)(2,3)(3,4)(4,5)(5,6)(7,7)
+        #   Y = (1,1)(2,2)(3,4)(4,5)(5,6)(7,7)
+        # 前三级打平时必须取输入序号序列字典序更小的 Y。
+        # 诱因：Y 的前缀 (1,1)(2,2) 局部最大残差 3 大于 X 的
+        # (1,2)(2,3) 的 2，但接入权值 8 的边 (5,6) 后最大残差被追平，
+        # 此时只能靠序号序列裁决——旧实现把 Y 的前缀提前合并丢弃了。
+        a = [4, 7, 11, 18, 22, 23, 24]
+        b = [0, 5, 8, 11, 12, 13, 28, 34]
+        sol, meets = solve(a, b, -1, -1, 8, 6)
+        self.assertTrue(meets)
+        self.assertEqual(sol.offset, -1)
+        self.assertEqual(sol.pair_count, 6)
+        self.assertEqual(sol.sum_abs_residual, 23)
+        self.assertEqual(sol.max_abs_residual, 8)
+        self.assertEqual(
+            [(p.index_a, p.index_b) for p in sol.pairs],
+            [(1, 1), (2, 2), (3, 4), (4, 5), (5, 6), (7, 7)],
+        )
+        self.assertEqual(sol.unpaired_a, [6])
+        self.assertEqual(sol.unpaired_b, [3, 8])
+
+    def test_wider_offset_range_prefers_more_pairs(self):
+        # 同一数据放宽到 [-50,50] 后，δ=-4 可形成 7 对保序配对
+        # （A 全部用上，残差 0,-2,-1,3,6,6,-8，和 26、最大 8）；
+        # 配对数最多是第一目标，故严格优于同分扩展场景的 6 对解。
+        a = [4, 7, 11, 18, 22, 23, 24]
+        b = [0, 5, 8, 11, 12, 13, 28, 34]
+        sol, meets = solve(a, b, -50, 50, 8, 6)
+        self.assertTrue(meets)
+        self.assertEqual(sol.offset, -4)
+        self.assertEqual(sol.pair_count, 7)
+        self.assertEqual(sol.sum_abs_residual, 26)
+        self.assertEqual(sol.max_abs_residual, 8)
+        self.assertEqual(
+            [(p.index_a, p.index_b) for p in sol.pairs],
+            [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7)],
+        )
+        self.assertEqual(sol.unpaired_a, [])
+        self.assertEqual(sol.unpaired_b, [8])
+
 
 class TestWideOffsetRange(unittest.TestCase):
     def test_two_billion_span(self):
