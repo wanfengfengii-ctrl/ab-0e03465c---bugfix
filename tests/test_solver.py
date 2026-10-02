@@ -20,25 +20,33 @@ def brute_best_matching(a, b, delta, tol):
     if m == 0:
         return 0, 0, None, []
 
-    # 按 i 升序、j 升序排列；DP 只允许 i'<i 且 j'<j 的前驱
+    # 按 i 升序、j 升序排列；DP 只允许 i'<i 且 j'<j 的前驱。
+    # 每条边按 (count, sum, max) 目标组合分别保留最小序号序列：
+    # 序号裁决对边扩展不保序（两条前缀的 max 可能被后续更大的残差
+    # 追平，届时才轮到序列分胜负），按四级键只留一条链会丢真解。
     order = sorted(range(m), key=lambda k: (edges[k][0], edges[k][1]))
-    best = [None] * m  # (count, sum, max, seq)
+    best = [None] * m  # {(count, sum, max): 最小序号序列}
     for rank, k in enumerate(order):
         i, j = edges[k]
         w = abs(a[i] + delta - b[j])
-        cand = (1, w, w, ((i + 1, j + 1),))
+        states = {(1, w, w): ((i + 1, j + 1),)}
         for rank2 in range(rank):
             k2 = order[rank2]
             i2, j2 = edges[k2]
             if i2 < i and j2 < j:
-                c2, s2, m2, seq2 = best[k2]
-                cand2 = (c2 + 1, s2 + w, max(m2, w), seq2 + ((i + 1, j + 1),))
-                if key_of(cand2) > key_of(cand):
-                    cand = cand2
-        best[k] = cand
+                for (c2, s2, m2), seq2 in best[k2].items():
+                    key3 = (c2 + 1, s2 + w, max(m2, w))
+                    seq = seq2 + ((i + 1, j + 1),)
+                    if key3 not in states or seq < states[key3]:
+                        states[key3] = seq
+        best[k] = states
 
-    winner = max(best, key=key_of)
-    count, sumr, maxr, seq = winner
+    all_chains = [
+        (c, s, mx, seq)
+        for states in best
+        for (c, s, mx), seq in states.items()
+    ]
+    count, sumr, maxr, seq = max(all_chains, key=key_of)
     chosen = [(i - 1, j - 1) for (i, j) in seq]
     return count, sumr, maxr, chosen
 
@@ -217,6 +225,26 @@ class TestKnownCases(unittest.TestCase):
         self.assertEqual(len(set(offsets)), 1)
         chosen = [[(p.index_a, p.index_b) for p in s.pairs] for s, _ in results]
         self.assertTrue(all(c == chosen[0] for c in chosen))
+
+    def test_tie_broken_by_smallest_index_sequence(self):
+        # 同分扩展场景：[(1,2),(2,3),(3,4),(4,5),(5,6),(7,7)] 与
+        # [(1,1),(2,2),(3,4),(4,5),(5,6),(7,7)] 的配对数、残差和、
+        # 最大残差三项目标完全相同（6 / 23 / 8），必须按输入序号序列
+        # 字典序稳定选择后者，未配对集合随之确定。
+        a = [4, 7, 11, 18, 22, 23, 24]
+        b = [0, 5, 8, 11, 12, 13, 28, 34]
+        sol, meets = solve(a, b, -1, -1, 8, 6)
+        self.assertTrue(meets)
+        self.assertEqual(sol.offset, -1)
+        self.assertEqual(sol.pair_count, 6)
+        self.assertEqual(sol.sum_abs_residual, 23)
+        self.assertEqual(sol.max_abs_residual, 8)
+        self.assertEqual(
+            [(p.index_a, p.index_b) for p in sol.pairs],
+            [(1, 1), (2, 2), (3, 4), (4, 5), (5, 6), (7, 7)],
+        )
+        self.assertEqual(sol.unpaired_a, [6])
+        self.assertEqual(sol.unpaired_b, [3, 8])
 
 
 class TestWideOffsetRange(unittest.TestCase):

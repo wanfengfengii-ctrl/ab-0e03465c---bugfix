@@ -34,9 +34,14 @@
 
 每个候选偏移上把可行边视为 DAG（i、j 均严格递增的链即合法配对），
 用 Fenwick 树做带权最长路 DP。边权为残差绝对值；链间按
-（配对数↑, 残差和↓, 最大残差↓, 边序号元组↑）比较。追加一条边时
-残差和相加、最大残差取 max，该字典序在同权扩展下保持，故可安全合并。
+（配对数↑, 残差和↓, 最大残差↓）比较。追加一条边时残差和相加、
+最大残差取 max，该字典序在同权扩展下保持，故可安全合并；
 同一 i 的边先统一查询、再统一更新，保证一个脉冲至多使用一次。
+第 5 级“输入序号序列”对边扩展不保序：两条前缀若仅最大残差不同，
+后续一条更大残差的边会把 max 追平，届时才轮到序列分胜负，
+被剪掉的前缀可能反而更优——故序列裁决不能并入 DP 剪枝，
+改为在最终选定的偏移上用后缀最小残差和表贪心重构字典序最小的
+最优链（见 ``_smallest_seq_chain``）。
 """
 
 from __future__ import annotations
@@ -102,61 +107,55 @@ class Solution:
 # Fenwick 树：j 前缀上的最优链（可合并半群）
 # ---------------------------------------------------------------------------
 
-# 链的比较键：（配对数↑, 残差和↓, 最大残差↓, 边序号元组↑, 末尾边下标）
-# 最大化该键即为字典序最优。末尾边下标仅用于回溯，不参与跨链优劣比较。
+# 链的比较键：（配对数↑, 残差和↓, 最大残差↓），最大化该键即为字典序最优。
+# 该三项目标对“追加同一条边”保持顺序（count/sum 平移保序、max 与同一后缀
+# 再取 max 保序），故按前缀合并与按边扩展都是精确的。输入序号序列不具备
+# 该性质，不参与此处比较（见 _smallest_seq_chain）。
 
 
 class _FenwickMax:
-    __slots__ = ("_n", "_count", "_sum", "_maxr", "_seq", "_edge")
+    __slots__ = ("_n", "_count", "_sum", "_maxr")
 
     def __init__(self, n: int) -> None:
         self._n = n
         self._count = [0] * (n + 1)
         self._sum = [0] * (n + 1)
         self._maxr = [0] * (n + 1)
-        self._seq: list[tuple] = [()] * (n + 1)
-        self._edge = [-1] * (n + 1)
 
     @staticmethod
-    def _better(count, sumr, maxr, seq, best_count, best_sum, best_maxr, best_seq):
+    def _better(count, sumr, maxr, best_count, best_sum, best_maxr):
         if count != best_count:
             return count > best_count
         if sumr != best_sum:
             return sumr < best_sum
-        if maxr != best_maxr:
-            return maxr < best_maxr
-        return seq < best_seq
+        return maxr < best_maxr
 
-    def update(self, pos, count, sumr, maxr, seq, edge_idx):
+    def update(self, pos, count, sumr, maxr):
         i = pos + 1
         while i <= self._n:
             if self._better(
-                count, sumr, maxr, seq,
-                self._count[i], self._sum[i], self._maxr[i], self._seq[i],
+                count, sumr, maxr,
+                self._count[i], self._sum[i], self._maxr[i],
             ):
                 self._count[i] = count
                 self._sum[i] = sumr
                 self._maxr[i] = maxr
-                self._seq[i] = seq
-                self._edge[i] = edge_idx
             i += i & -i
 
     def query(self, pos):
-        """返回位置 [0, pos] 内最优链的 (count, sum, max, seq, edge_idx)。"""
-        bc, bs, bm, bs_seq, be = 0, 0, 0, (), -1
+        """返回位置 [0, pos] 内最优链的 (count, sum, max)。"""
+        bc, bs, bm = 0, 0, 0
         i = pos + 1
         while i > 0:
             if self._better(
-                self._count[i], self._sum[i], self._maxr[i], self._seq[i],
-                bc, bs, bm, bs_seq,
+                self._count[i], self._sum[i], self._maxr[i],
+                bc, bs, bm,
             ):
                 bc = self._count[i]
                 bs = self._sum[i]
                 bm = self._maxr[i]
-                bs_seq = self._seq[i]
-                be = self._edge[i]
             i -= i & -i
-        return bc, bs, bm, bs_seq, be
+        return bc, bs, bm
 
 
 # ---------------------------------------------------------------------------
@@ -192,86 +191,116 @@ def _upper_bound(values: list[int], target: int) -> int:
 
 
 def _best_at_delta(a: list[int], b: list[int], delta: int, tol: int):
-    """返回 (count, sum_abs, max_abs, chosen_edges)。
+    """返回固定偏移下最优链的三项目标 (count, sum_abs, max_abs)。
 
-    chosen_edges 为 (i, j) 列表（0 基，i、j 均升序）。
+    max_abs 在无配对时为 None。输入序号序列裁决不在此进行——它对边扩展
+    不保序，若并入剪枝会丢掉“max 被后续追平后序列更优”的链。
     """
     na, nb = len(a), len(b)
 
-    # 按 i 升序收集可行边，同 i 内 j 降序。
-    # 分批“先查询后更新”，杜绝同一 i 被使用两次。
+    # 按 i 升序处理可行边，同 i 的边先统一查询、再统一更新，
+    # 杜绝同一 i 被使用两次。
     fen = _FenwickMax(nb)
-    # 每条边的 DP 结果
-    d_count: list[int] = []
-    d_sum: list[int] = []
-    d_max: list[int] = []
-    d_prev: list[int] = []
-    edge_ij: list[tuple[int, int]] = []
-
-    edge_uid = 0
     for i in range(na):
         ai_d = a[i] + delta
         lo_j = _lower_bound(b, ai_d - tol)
         hi_j = _upper_bound(b, ai_d + tol)
-        js = list(range(hi_j - 1, lo_j - 1, -1))
-        if not js:
+        if hi_j <= lo_j:
             continue
 
         # 1) 全部查询（Fenwick 中只有 i' < i 的边）
-        queries = []
-        for j in js:
-            q = fen.query(j - 1) if j > 0 else (0, 0, 0, (), -1)
-            queries.append(q)
+        batch = []
+        for j in range(hi_j - 1, lo_j - 1, -1):
+            pc, ps, pm = fen.query(j - 1) if j > 0 else (0, 0, 0)
+            w = abs(ai_d - b[j])
+            batch.append((j, pc + 1, ps + w, max(pm, w)))
 
         # 2) 全部更新
-        for j, (pc, ps, pm, pseq, pedge) in zip(js, queries):
-            w = abs(ai_d - b[j])
-            count = pc + 1
-            sumr = ps + w
-            maxr = w if pc == 0 else max(pm, w)
-            seq = pseq + ((i + 1, j + 1),)
-            edge_ij.append((i, j))
-            d_count.append(count)
-            d_sum.append(sumr)
-            d_max.append(maxr)
-            d_prev.append(pedge)
-            fen.update(j, count, sumr, maxr, seq, edge_uid)
-            edge_uid += 1
+        for j, count, sumr, maxr in batch:
+            fen.update(j, count, sumr, maxr)
 
-    if edge_uid == 0:
-        return 0, 0, None, []
-
-    # 全局最优链头
-    best_uid = 0
-    for uid in range(1, edge_uid):
-        if _FenwickMax._better(
-            d_count[uid], d_sum[uid], d_max[uid], _seq_of(edge_ij, d_prev, uid),
-            d_count[best_uid], d_sum[best_uid], d_max[best_uid],
-            _seq_of(edge_ij, d_prev, best_uid),
-        ):
-            best_uid = uid
-
-    # 回溯
-    chosen_uids: list[int] = []
-    cur = best_uid
-    while cur != -1:
-        chosen_uids.append(cur)
-        cur = d_prev[cur]
-    chosen_uids.reverse()
-    chosen = [edge_ij[u] for u in chosen_uids]
-    return d_count[best_uid], d_sum[best_uid], d_max[best_uid], chosen
+    count, sumr, maxr = fen.query(nb - 1)
+    return count, sumr, (maxr if count else None)
 
 
-def _seq_of(edge_ij, d_prev, uid):
-    """回溯某条边链的 (1基 i, 1基 j) 序号元组（仅用于链头比较）。"""
-    out = []
-    cur = uid
-    while cur != -1:
-        i, j = edge_ij[cur]
-        out.append((i + 1, j + 1))
-        cur = d_prev[cur]
-    out.reverse()
-    return tuple(out)
+def _smallest_seq_chain(
+    a: list[int],
+    b: list[int],
+    delta: int,
+    tol: int,
+    need_count: int,
+    need_sum: int,
+    need_max: int,
+):
+    """固定偏移下，达到 (need_count, need_sum, need_max) 的输入序号序列
+    字典序最小链，返回 0 基 (i, j) 升序列表。
+
+    只保留残差 <= need_max 的可行边：此时任何达到 (need_count, need_sum)
+    的链其最大残差自动等于 need_max（need_max 已是三项目标下的最优值，
+    不存在更小的可行链）。suffix[k][i][j] 记录仅用 i' >= i、j' >= j 的边
+    组成 k 条边链的最小残差和；据此贪心逐位选取仍能补全为
+    (need_count, need_sum) 链的最小下一条边，即为字典序最小解。
+    """
+    if need_count == 0:
+        return []
+    na, nb = len(a), len(b)
+    inf = float("inf")
+
+    weights: list[list[int | None]] = [[None] * nb for _ in range(na)]
+    for i in range(na):
+        ai_d = a[i] + delta
+        lo_j = _lower_bound(b, ai_d - tol)
+        hi_j = _upper_bound(b, ai_d + tol)
+        for j in range(lo_j, hi_j):
+            res = abs(ai_d - b[j])
+            if res <= need_max:
+                weights[i][j] = res
+
+    # suffix[k][i][j]：全部边满足 i' >= i、j' >= j 的 k 边链的最小残差和
+    suffix: list[list[list[float]]] = [
+        [[0] * (nb + 1) for _ in range(na + 1)]  # k = 0：空链，残差和 0
+    ]
+    for k in range(1, need_count + 1):
+        prev = suffix[k - 1]
+        table = [[inf] * (nb + 1) for _ in range(na + 1)]
+        for i in range(na - 1, -1, -1):
+            row, row_below, wrow, prev_below = (
+                table[i], table[i + 1], weights[i], prev[i + 1],
+            )
+            for j in range(nb - 1, -1, -1):
+                best = row_below[j]
+                if row[j + 1] < best:
+                    best = row[j + 1]
+                wij = wrow[j]
+                if wij is not None:
+                    start = wij + prev_below[j + 1]
+                    if start < best:
+                        best = start
+                row[j] = best
+        suffix.append(table)
+
+    chosen: list[tuple[int, int]] = []
+    spent = 0
+    ci = cj = 0  # 下一条边须满足 i >= ci、j >= cj（严格大于上一条）
+    for k in range(need_count, 0, -1):
+        rest = suffix[k - 1]
+        budget = need_sum - spent
+        found = False
+        for i in range(ci, na):
+            wrow, rrow = weights[i], rest[i + 1]
+            for j in range(cj, nb):
+                wij = wrow[j]
+                if wij is not None and wij + rrow[j + 1] <= budget:
+                    chosen.append((i, j))
+                    spent += wij
+                    ci, cj = i + 1, j + 1
+                    found = True
+                    break
+            if found:
+                break
+        if not found:  # 不变式保证不会发生：suffix[k][ci][cj] <= 剩余预算
+            raise AssertionError("最优链重构失败")
+    return chosen
 
 
 # ---------------------------------------------------------------------------
@@ -440,24 +469,6 @@ def _prefix_dp(edges, weights, nb, forward):
 # ---------------------------------------------------------------------------
 
 
-class _Rev:
-    """反转比较，使“值小者优”适配最大化比较键。"""
-
-    __slots__ = ("value",)
-
-    def __init__(self, value) -> None:
-        self.value = value
-
-    def __lt__(self, other: "_Rev") -> bool:
-        return self.value > other.value
-
-    def __gt__(self, other: "_Rev") -> bool:
-        return self.value < other.value
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, _Rev) and self.value == other.value
-
-
 def solve(
     a: list[int],
     b: list[int],
@@ -492,24 +503,23 @@ def solve(
     )
 
     # ---- 第一阶段：评估全部段边界点 ----
-    # 最大化比较键：(count, -sum, -max, -delta, Rev(边序号元组))
+    # 最大化比较键：(count, -sum, -max, -delta)。第 5 级“输入序号序列”
+    # 排在偏移之后，而候选偏移两两不同，跨候选比较不会触及该级；
+    # 只需在最终选定的偏移上重构字典序最小的最优链。
     best_key = None
-    best_chosen: list[tuple[int, int]] = []
     best_delta = offset_lo
 
     # 记录每个边界点的 (count, sum) 与完整结果，供段存活判断复用
     boundary_values: dict[int, tuple[int, int]] = {}
 
     def consider(delta: int):
-        nonlocal best_key, best_chosen, best_delta
-        count, sumr, maxr, chosen = _best_at_delta(a, b, delta, tolerance)
+        nonlocal best_key, best_delta
+        count, sumr, maxr = _best_at_delta(a, b, delta, tolerance)
         boundary_values[delta] = (count, sumr)
         maxr_key = 0 if maxr is None else maxr
-        seq = tuple((i + 1, j + 1) for i, j in chosen)
-        key = (count, -sumr, -maxr_key, -delta, _Rev(seq))
+        key = (count, -sumr, -maxr_key, -delta)
         if best_key is None or key > best_key:
             best_key = key
-            best_chosen = chosen
             best_delta = delta
 
     for delta in boundaries:
@@ -554,10 +564,13 @@ def solve(
         for delta in sorted(local_mids):
             consider(delta)
 
-    count, neg_sum, neg_max, neg_delta, _ = best_key
+    count, neg_sum, neg_max, neg_delta = best_key
     delta = -neg_delta
     sumr = -neg_sum
     maxr = None if count == 0 else -neg_max
+
+    # 第 5 级裁决：在最终偏移上取达到三项目标的字典序最小链
+    best_chosen = _smallest_seq_chain(a, b, delta, tolerance, count, sumr, maxr)
 
     used_a = {i for i, _ in best_chosen}
     used_b = {j for _, j in best_chosen}
