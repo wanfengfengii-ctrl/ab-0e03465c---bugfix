@@ -1,0 +1,9 @@
+# .git / __pycache__ 等由 .gitignore 处理；构建镜像时排除无关文件
+.git
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.md
+.env

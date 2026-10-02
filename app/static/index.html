@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>双探头脉冲符合校准</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>核医学双探头脉冲符合校准</h1>
+    <p class="subtitle">
+      联合选择整数时钟偏移与保序一对一配对，依次最大化配对数、最小化残差绝对值总和、
+      最小化最大残差，再按偏移及输入序号稳定裁决。
+    </p>
+
+    <form id="calib-form" autocomplete="off">
+      <div class="grid">
+        <section class="card">
+          <h2>探头 A 脉冲时间（纳秒）</h2>
+          <textarea id="times_a" rows="6" spellcheck="false"
+            placeholder="6 至 24 个严格递增整数，逗号或换行分隔"></textarea>
+          <p class="hint" id="hint-a"></p>
+        </section>
+        <section class="card">
+          <h2>探头 B 脉冲时间（纳秒）</h2>
+          <textarea id="times_b" rows="6" spellcheck="false"
+            placeholder="6 至 24 个严格递增整数，逗号或换行分隔"></textarea>
+          <p class="hint" id="hint-b"></p>
+        </section>
+      </div>
+
+      <section class="card params">
+        <h2>校准参数</h2>
+        <div class="param-grid">
+          <label>偏移下界（含，纳秒）
+            <input type="number" step="1" id="offset_lo" value="-1000000000" />
+          </label>
+          <label>偏移上界（含，纳秒）
+            <input type="number" step="1" id="offset_hi" value="1000000000" />
+          </label>
+          <label>符合容差（纳秒）
+            <input type="number" step="1" min="0" id="tolerance" value="10" />
+          </label>
+          <label>最低配对数
+            <input type="number" step="1" min="1" id="min_pairs" value="4" />
+          </label>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button type="submit" id="submit-btn">提交校准</button>
+        <span id="stale-note" class="stale-note" hidden>输入已修改，以下旧结论已失效，请重新提交</span>
+        <span id="error-note" class="error-note" hidden></span>
+      </div>
+    </form>
+
+    <section id="result" class="result" hidden>
+      <div id="result-banner"></div>
+      <div id="result-body"></div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

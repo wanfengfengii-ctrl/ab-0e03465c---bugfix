@@ -1,0 +1,30 @@
+services:
+  app:
+    build: .
+    image: coincidence-calib:latest
+    environment:
+      # 容器内服务监听端口（可配置）；宿主端口映射同一值
+      APP_PORT: "${APP_PORT:-8080}"
+    ports:
+      # 以可配置的 APP_PORT 映射宿主机端口
+      - "${APP_PORT:-8080}:${APP_PORT:-8080}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ['APP_PORT']+'/health',timeout=2).read()"]
+      interval: 3s
+      timeout: 3s
+      start_period: 3s
+      retries: 20
+    restart: unless-stopped
+
+  verify:
+    build: .
+    image: coincidence-calib:latest
+    # 一次性服务：等 app 健康后执行代码测试、构建校验与宽偏移区间 API 冒烟，
+    # 以退出码报告结果，完成后容器退出（不重启）
+    command: ["python", "verify.py"]
+    environment:
+      APP_PORT: "${APP_PORT:-8080}"
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: "no"
